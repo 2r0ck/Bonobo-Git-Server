@@ -36,6 +36,7 @@ namespace Bonobo.Git.Server.Controllers
         [Dependency]
         public IAuthenticationProvider AuthenticationProvider { get; set; }
 
+        [WebAuthorize]
         public ActionResult Index(string sortGroup = null, string searchString = null)
         {
             var unorderedRepositoryDetails = GetIndexModel().ToList();
