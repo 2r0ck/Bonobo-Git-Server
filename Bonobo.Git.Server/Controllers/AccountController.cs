@@ -15,7 +15,7 @@ using Bonobo.Git.Server.Security;
 
 using Bonobo.Git.Server.Helpers;
 using System.DirectoryServices.AccountManagement;
-
+using Bonobo.Git.Server.Data;
 using Microsoft.Practices.Unity;
 using Serilog;
 using Microsoft.Owin.Security;
@@ -32,6 +32,9 @@ namespace Bonobo.Git.Server.Controllers
 
         [Dependency]
         public IAuthenticationProvider AuthenticationProvider { get; set; }
+
+        [Dependency]
+        public ITeamRepository TeamRepository { get; set; }
 
         [WebAuthorize]
         public ActionResult Detail(Guid id)
@@ -215,6 +218,161 @@ namespace Bonobo.Git.Server.Controllers
                     }
 
                     return RedirectToAction("Index", "Repository");
+                }
+                else
+                {
+                    ModelState.AddModelError("Username", Resources.Account_Create_AccountAlreadyExists);
+                    return RedirectToAction("Index");
+                }
+            }
+            else
+            {
+                return RedirectToAction("Unauthorized", "Home");
+            }
+        }
+
+
+        public ActionResult CreateADUser_GJ()
+        {
+            var efms = MembershipService as EFMembershipService;
+
+            if ((!Request.IsAuthenticated) || efms == null)
+            {
+                Log.Warning("CreateADUser: can't run IsAuth: {IsAuth}, MemServ {MemServ}",
+                    Request.IsAuthenticated,
+                    MembershipService.GetType());
+                return RedirectToAction("Unauthorized", "Home");
+            }
+
+            var credentials = User.Username();
+            var adUser = ADHelper.GetUserPrincipal(credentials);
+            if (adUser != null)
+            {
+                var userId = adUser.Guid.GetValueOrDefault(Guid.NewGuid());
+                if (MembershipService.CreateUser(credentials, Guid.NewGuid().ToString(), adUser.GivenName, adUser.Surname, adUser.EmailAddress, userId))
+                {
+                    /************Custom bing adgroup to team***********/
+                    var mapGroups = ActiveDirectorySettings.TeamNameToGroupNameMapping;
+                    if (mapGroups != null)
+                    {
+                        foreach (var mapGroup in mapGroups)
+                        {
+                            try
+                            {
+                                GroupPrincipal group;
+                                using (var pc = ADHelper.GetPrincipalGroup(mapGroup.Value, out group))
+                                {
+                                    if (group != null)
+                                    {
+                                        //get or add group
+                                        var team = TeamRepository.GetTeam(mapGroup.Key);
+                                        if (team == null)
+                                        {
+                                            team = new TeamModel()
+                                            {
+                                                Id = Guid.NewGuid(),
+                                                Name = mapGroup.Key,
+                                                Description = $"Auto create from GJ ADGroup ({mapGroup.Value})"
+                                            };
+                                            if (!TeamRepository.Create(team))
+                                            {
+                                                Log.Error($"Failed to Auto create team: {mapGroup.Key}");
+                                                continue;
+                                            }
+                                        }
+
+
+                                        foreach (string username in group.GetMembers(true).OfType<UserPrincipal>().Select(x => x.UserPrincipalName).Where(x => x != null))
+                                        { 
+                                            //add to group member
+                                            if (username == adUser.EmailAddress)
+                                            {
+                                                var existsUsers = new List<UserModel>();
+                                                if (team.Members != null)
+                                                {
+                                                    existsUsers.AddRange(team.Members);
+                                                }
+                                                existsUsers.Add(new UserModel() {Id = userId });
+                                                team.Members = existsUsers.ToArray();
+                                                TeamRepository.Update(team);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.Error(ex, $"Failed to bind AD group->Teams: {mapGroup.Value}->{mapGroup.Key}");
+                            }
+                        }
+                    }
+                    /**********Bind To admin role*************/
+                    bool userContainsAdminGroup = false;
+                    var mapRoles = ActiveDirectorySettings.RoleNameToGroupNameMapping.Where(x=>x.Key.Equals(Definitions.Roles.Administrator)).Select(x=>x.Value);
+                    if (mapGroups != null)
+                    {
+                        foreach (var mapAdGroup in mapRoles)
+                        {
+                            try
+                            {
+                                GroupPrincipal group;
+                                using (var pc = ADHelper.GetPrincipalGroup(mapAdGroup, out group))
+                                {
+                                    if (group != null)
+                                    {
+
+                                        foreach (
+                                            string username in
+                                                group.GetMembers(true)
+                                                    .OfType<UserPrincipal>()
+                                                    .Select(x => x.UserPrincipalName)
+                                                    .Where(x => x != null))
+                                        {
+                                            //add to group member
+                                            if (username == adUser.EmailAddress)
+                                            {
+                                                userContainsAdminGroup = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (userContainsAdminGroup)
+                                {
+                                    break;
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.Error(ex, $"Failed to bind AD group-> Admins roles. Map ADGroup : {mapAdGroup}");
+                            }
+                        }
+                    }
+
+
+                    /***********************/
+
+                        // 2 because we just added the user and there is the default admin user.
+                        if (userContainsAdminGroup || AuthenticationSettings.ImportWindowsAuthUsersAsAdmin ||
+                            efms.UserCount() == 2)
+                        {
+                            Log.Information("Making AD user {User} into an admin", credentials);
+
+                            var id = MembershipService.GetUserModel(credentials).Id;
+                            RoleProvider.AddUserToRoles(id, new[] {Definitions.Roles.Administrator});
+
+                            // Add the administrator role to the Identity/cookie
+                            var Identity = (ClaimsIdentity) User.Identity;
+                            Identity.AddClaim(new Claim(ClaimTypes.Role, Definitions.Roles.Administrator));
+                            var AuthenticationManager = HttpContext.GetOwinContext().Authentication;
+                            AuthenticationManager.AuthenticationResponseGrant =
+                                new AuthenticationResponseGrant(new ClaimsPrincipal(Identity),
+                                    new AuthenticationProperties {IsPersistent = true});
+                        }
+
+                        return RedirectToAction("Index", "Repository");
                 }
                 else
                 {

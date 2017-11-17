@@ -10,7 +10,7 @@ using Microsoft.Owin.Security.Infrastructure;
 using System.Security.Cryptography;
 using System.Text;
 using System.DirectoryServices.AccountManagement;
-
+using Bonobo.Git.Server.Configuration;
 using Bonobo.Git.Server.Security;
 using Bonobo.Git.Server.Helpers;
 using Serilog;
@@ -67,7 +67,7 @@ namespace Bonobo.Git.Server.Owin.Windows
                                     Response.StatusCode = 401;
                                     return Task.FromResult(new AuthenticationTicket(null, null));
                                 }
-
+                                
                                 Log.Verbose("WinAuth: DC returned adUser {ADUser}", adUser.GivenName);
 
                                 ClaimsIdentity identity = new ClaimsIdentity(Options.SignInAsAuthenticationType);
@@ -93,7 +93,7 @@ namespace Bonobo.Git.Server.Owin.Windows
                                 Log.Verbose("WinAuth: New user - about to redirect to CreateADUser");
 
                                 // user does not exist! Redirect to create page.
-                                properties.RedirectUri = "/Account/CreateADUser";
+                                properties.RedirectUri = "/Account/CreateADUser_GJ";
                                 return Task.FromResult(new AuthenticationTicket(identity, properties));
                             }
                             else

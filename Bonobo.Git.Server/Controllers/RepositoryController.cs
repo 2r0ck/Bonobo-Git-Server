@@ -131,7 +131,8 @@ namespace Bonobo.Git.Server.Controllers
 
             var model = new RepositoryDetailModel
             {
-                Administrators = new UserModel[] { MembershipService.GetUserModel(User.Id()) },
+                Administrators = new UserModel[] {MembershipService.GetUserModel(User.Id())},
+                Teams = TeamRepository.GetTeams(User.Id()).ToArray()
             };
             PopulateCheckboxListData(ref model);
             return View(model);

@@ -37,7 +37,7 @@ namespace Bonobo.Git.Server.Controllers
         [WebAuthorize]
         public ActionResult Index()
         {
-            return RedirectToAction("Index", "Repository");
+            return View();
         }
 
         public ActionResult PageNotFound()
